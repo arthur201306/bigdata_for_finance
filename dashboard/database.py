@@ -17,7 +17,7 @@ def get_db_connection():
     host = os.getenv('DB_HOST', 'localhost')
     port = os.getenv('DB_PORT', '5432')
     dbname = os.getenv('DB_NAME', 'data_lake')
-    return create_engine(f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}")
+    return create_engine(f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}?client_encoding=utf8")
 
 # ==============================================================================
 # QUERIES DO BALANÇO PATRIMONIAL
