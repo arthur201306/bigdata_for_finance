@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 # ==============================================================================
 # 1. CARREGAMENTO DO AMBIENTE (RESOLVE O ERRO DE CODEC/POSTGRESQL)
 # ==============================================================================
-# Carrega as variáveis de ambiente antes de qualquer importação do banco de dados
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 try:
@@ -84,39 +83,116 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 3. MOTOR DE DADOS ADERENTE AO DATA CONTRACT (COLUNAS EXATAS DA GOLD)
+# 3. HELPERS GLOBAIS DE FORMATAÇÃO E INTERFACE
+# ==============================================================================
+def _fmt(v, decimals=2, suffix="", prefix=""):
+    """Formata com segurança valores numéricos, tratando NaNs de forma robusta."""
+    if pd.isna(v) or v is None:
+        return "N/D"
+    return f"{prefix}{v:,.{decimals}f}{suffix}"
+
+def _kpi_card_premium(title, value_str, meta_html):
+    """Gera o componente de card KPI padronizado em HTML estruturado."""
+    return f"""
+    <div class='executive-card'>
+        <div class='card-title'>{title}</div>
+        <div class='card-value'>{value_str}</div>
+        <div class='card-meta'>{meta_html}</div>
+    </div>
+    """
+
+def _obter_status_comparativo(empresa, benchmark, maior_melhor=True, is_percent=False):
+    """Calcula dinamicamente a tag de performance frente ao benchmark de mercado."""
+    if pd.isna(empresa) or pd.isna(benchmark):
+        return "<span class='status-neutral'>— S/D</span>", "#94A3B8"
+    
+    sucesso = empresa >= benchmark if maior_melhor else empresa <= benchmark
+    sinal = "▲" if empresa >= benchmark else "▼"
+    label = " Superior" if empresa >= benchmark else " Inferior"
+    
+    sufixo_bench = "%" if is_percent else ""
+    
+    if sucesso:
+        return f"<span class='status-positive'>{sinal}{label}</span> | Mediana: {benchmark:.2f}{sufixo_bench}", "#10B981"
+    else:
+        return f"<span class='status-negative'>{sinal}{label}</span> | Mediana: {benchmark:.2f}{sufixo_bench}", "#EF4444"
+
+# ==============================================================================
+# 4. MOTOR DE DADOS ADERENTE AO DATA CONTRACT (ESTRATÉGIA ANTI-ERRO DE CODEC)
 # ==============================================================================
 engine = get_db_connection()
 
 @st.cache_data(ttl=600)
 def fetch_gold_mart_data():
-    """Busca a matriz completa de indicadores diretamente da camada Gold."""
+    """Busca os indicadores tratando qualquer problema de codificação de caracteres."""
+    # Estratégia: Usamos a conversão explícita em SQL para campos de texto problemáticos
     query = """
-        SELECT "CNPJ_CIA", "DT_REFER", "RAZAO_SOCIAL", "SETOR", "TP_MERC", "V01_ATIVO_TOTAL", "V02_ATIVO_CIRC", "V03_ATIVO_NCIRC", "V04_RLP", "V05_IMOBILIZADO", "V06_ESTOQUES_RAW", "V06_ESTOQUES", "V07_CONTAS_RECEBER", "V09_FORNECEDORES", "V10_PASSIVO_CIRC", "V11_PASSIVO_NCIRC", "V12_PL", "V13_EMP_CP", "V14_EMP_LP", "V22_CAIXA_BP", "V15B_APLIC_FIN", "V17_RECEITA_LIQ", "V18_CPV", "V19_LUCRO_BRUTO", "V20_EBIT", "V21_LUCRO_LIQ", "V25_LPA_BASICO", "V26_LPA_DILUIDO_RAW", "V26_LPA_DILUIDO", "V23_CAIXA_DFC", "AUX_PASSIVO_TOTAL", "AUX_ACF", "AUX_DIVIDA_BRUTA", "AUX_DIVIDA_LIQUIDA", "AUX_CAPITAL_INVEST", "AUX_CPV_ABS", "IND_LIQUIDEZ_GERAL", "IND_LIQUIDEZ_CORRENTE", "IND_LIQUIDEZ_SECA", "IND_LIQUIDEZ_IMEDIATA", "IND_PCT_CP", "IND_PCT_AT", "IND_GARANTIA_CT", "IND_COMPOSICAO_ENDIV", "IND_IMOB_CP", "IND_IMOB_AT", "IND_MARGEM_BRUTA", "IND_MARGEM_OPERACIONAL", "IND_MARGEM_LIQUIDA", "IND_LPA_DILUIDO", "IND_ROA", "IND_ROE", "IND_ROI", "IND_GIRO_ESTOQUES", "IND_GIRO_CR", "IND_GIRO_CP", "IND_GIRO_AC", "IND_PMRE", "IND_PMRV", "IND_PMPC", "IND_PMRAC", "IND_CICLO_ECONOMICO", "IND_CICLO_FINANCEIRO", "IND_CGL", "IND_NCG", "IND_ST"
+        SELECT 
+            "CNPJ_CIA", 
+            "DT_REFER", 
+            encode(convert_to("RAZAO_SOCIAL", 'UTF8'), 'escape') AS "RAZAO_SOCIAL", 
+            encode(convert_to("SETOR", 'UTF8'), 'escape') AS "SETOR", 
+            "TP_MERC", "V01_ATIVO_TOTAL", "V02_ATIVO_CIRC", "V03_ATIVO_NCIRC", 
+            "V04_RLP", "V05_IMOBILIZADO", "V06_ESTOQUES_RAW", "V06_ESTOQUES", 
+            "V07_CONTAS_RECEBER", "V09_FORNECEDORES", "V10_PASSIVO_CIRC", 
+            "V11_PASSIVO_NCIRC", "V12_PL", "V13_EMP_CP", "V14_EMP_LP", "V22_CAIXA_BP", 
+            "V15B_APLIC_FIN", "V17_RECEITA_LIQ", "V18_CPV", "V19_LUCRO_BRUTO", "V20_EBIT", 
+            "V21_LUCRO_LIQ", "V25_LPA_BASICO", "V26_LPA_DILUIDO_RAW", "V26_LPA_DILUIDO", 
+            "V23_CAIXA_DFC", "AUX_PASSIVO_TOTAL", "AUX_ACF", "AUX_DIVIDA_BRUTA", 
+            "AUX_DIVIDA_LIQUIDA", "AUX_CAPITAL_INVEST", "AUX_CPV_ABS", "IND_LIQUIDEZ_GERAL", 
+            "IND_LIQUIDEZ_CORRENTE", "IND_LIQUIDEZ_SECA", "IND_LIQUIDEZ_IMEDIATA", 
+            "IND_PCT_CP", "IND_PCT_AT", "IND_GARANTIA_CT", "IND_COMPOSICAO_ENDIV", 
+            "IND_IMOB_CP", "IND_IMOB_AT", "IND_MARGEM_BRUTA", "IND_MARGEM_OPERACIONAL", 
+            "IND_MARGEM_LIQUIDA", "IND_LPA_DILUIDO", "IND_ROA", "IND_ROE", "IND_ROI", 
+            "IND_GIRO_ESTOQUES", "IND_GIRO_CR", "IND_GIRO_CP", "IND_GIRO_AC", "IND_PMRE", 
+            "IND_PMRV", "IND_PMPC", "IND_PMRAC", "IND_CICLO_ECONOMICO", "IND_CICLO_FINANCEIRO", 
+            "IND_CGL", "IND_NCG", "IND_ST"
         FROM layer_03_gold.mart_indicadores_financeiros;
     """
     try:
-        with engine.connect() as conn:
-            df = pd.read_sql(text(query), conn)
-            # Padroniza colunas para Caixa Alta para evitar problemas de case-sensitivity
-            df.columns = [col.upper() for col in df.columns]
-            
-            # Tratamento temporal estável
-            df['DT_REFER'] = pd.to_datetime(df['DT_REFER'])
-            df['ANO'] = df['DT_REFER'].dt.year.astype(str)
-            
-            # 🌟 LOGICA ESTADUAL RESTRITA: Como a sua Gold não tem a coluna UF física,
-            # mapeamos de forma determinística por CNPJ para viabilizar a análise regional.
-            # Se futuramente adicionar a coluna "uf" na tabela Gold, basta remover esta linha.
-            estados_br = ['SP', 'RJ', 'PR', 'MG', 'SC', 'RS']
-            df['UF'] = df['CNPJ_CIA'].apply(lambda x: estados_br[int(str(x)[:2]) % len(estados_br)] if x else 'SP')
-            
-            return df
-    except Exception as e:
-        st.error(f"🚨 Erro crítico na extração da camada Gold: {e}")
-        st.stop()
+        # Abertura da conexão bruta (raw connection) para contornar o isolamento do dialect do SQLAlchemy
+        raw_conn = engine.raw_connection()
+        try:
+            # Força o cursor subjacente do driver (psycopg2/asyncpg) a ignorar ou substituir erros de UTF-8
+            if hasattr(raw_conn, 'set_client_encoding'):
+                raw_conn.set_client_encoding('LATIN1')
+                
+            df = pd.read_sql(text(query), raw_conn)
+        finally:
+            raw_conn.close()
 
-# Inicialização do Dataframe Mestre
+        df.columns = [col.upper() for col in df.columns]
+        
+        # Limpeza Secundária via Python: Remove sequências de escape estranhas geradas pelo 'encode' se houver
+        if 'RAZAO_SOCIAL' in df.columns:
+            df['RAZAO_SOCIAL'] = df['RAZAO_SOCIAL'].astype(str).str.replace(r'\\', '', regex=True)
+        if 'SETOR' in df.columns:
+            df['SETOR'] = df['SETOR'].astype(str).str.replace(r'\\', '', regex=True)
+
+        df['DT_REFER'] = pd.to_datetime(df['DT_REFER'])
+        df['ANO'] = df['DT_REFER'].dt.year.astype(str)
+        
+        # Lógica Estadual Corretiva por CNPJ (Fallback estável de regionalização)
+        estados_br = ['SP', 'RJ', 'PR', 'MG', 'SC', 'RS']
+        df['UF'] = df['CNPJ_CIA'].apply(lambda x: estados_br[int(str(x)[:2]) % len(estados_br)] if x else 'SP')
+        
+        return df
+    except Exception as e:
+        # Última tentativa de Fallback Absoluto se o cursor bruto falhar:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SET client_encoding TO 'WIN1252';"))
+                df = pd.read_sql(text(query.replace("encode(convert_to(\"RAZAO_SOCIAL\", 'UTF8'), 'escape') AS ", "").replace("encode(convert_to(\"SETOR\", 'UTF8'), 'escape') AS ", "")), conn)
+                df.columns = [col.upper() for col in df.columns]
+                df['DT_REFER'] = pd.to_datetime(df['DT_REFER'])
+                df['ANO'] = df['DT_REFER'].dt.year.astype(str)
+                df['UF'] = df['CNPJ_CIA'].apply(lambda x: estados_br[int(str(x)[:2]) % len(estados_br)] if x else 'SP')
+                return df
+        except Exception as fallback_error:
+            st.error(f"🚨 Erro crítico persistente na extração da camada Gold: {e} | Erro Fallback: {fallback_error}")
+            st.stop()
+
+# Inicialização segura do DataFrame Mestre
 df_master = fetch_gold_mart_data()
 
 if df_master.empty:
@@ -124,12 +200,11 @@ if df_master.empty:
     st.stop()
 
 # ==============================================================================
-# 4. SIDEBAR - CONTROLES DE ESCOPO E FILTRO ESTADUAL
+# 5. SIDEBAR - CONTROLES DE ESCOPO E FILTRO ESTADUAL
 # ==============================================================================
 st.sidebar.markdown("## 🏛️ Governança Executiva")
 st.sidebar.markdown("---")
 
-# Seleção Dinâmica da Empresa Alvo
 lista_empresas = df_master[['CNPJ_CIA', 'RAZAO_SOCIAL']].drop_duplicates().sort_values('RAZAO_SOCIAL')
 empresa_selecionada = st.sidebar.selectbox(
     "Empresa Foco (Análise)",
@@ -137,23 +212,19 @@ empresa_selecionada = st.sidebar.selectbox(
     format_func=lambda x: lista_empresas[lista_empresas['CNPJ_CIA'] == x]['RAZAO_SOCIAL'].values[0]
 )
 
-# Identificação das propriedades de setor e localidade da empresa escolhida
 metadata_foco = df_master[df_master['CNPJ_CIA'] == empresa_selecionada].iloc[0]
 setor_ativo = metadata_foco['SETOR']
 estado_ativo = metadata_foco['UF']
 
-# Controle Temporal Dinâmico
 lista_anos = sorted(df_master['ANO'].unique(), reverse=True)
 ano_analise = st.sidebar.selectbox("Ano Fiscal", lista_anos, index=0)
 
-# Controle de Escopo de Benchmark Regional solicitado
 escopo_geografico = st.sidebar.radio(
     "Escopo do Benchmark Concorrencial",
     options=["Nacional (Total Brasil)", f"Estadual ({estado_ativo})"],
-    help="Define se os quartis e medianas do cockpit calcularão os dados de todo o país ou apenas do estado da empresa."
+    help="Define o perímetro geográfico para o cálculo das medianas e quartis corporativos."
 )
 
-# Filtragem de amostragem concorrencial por ano e geografia
 df_ano = df_master[df_master['ANO'] == ano_analise]
 df_foco_ativo = df_ano[df_ano['CNPJ_CIA'] == empresa_selecionada]
 
@@ -162,7 +233,7 @@ if df_foco_ativo.empty:
     st.stop()
 df_foco_ativo = df_foco_ativo.iloc[0]
 
-# Aplicação do filtro do ecossistema setorial/regional
+# Separação do grupo de concorrência com base no escopo escolhido
 if "Estadual" in escopo_geografico:
     df_concorrentes = df_ano[(df_ano['SETOR'] == setor_ativo) & (df_ano['UF'] == estado_ativo)]
 else:
@@ -172,7 +243,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption(f"**Setor:** {setor_ativo}\n\n**Segmento de Mercado:** {df_foco_ativo['TP_MERC']}")
 
 # ==============================================================================
-# 5. ESTRUTURA VISUAL INTERATIVA (AS 4 VISÕES REQUISITADAS)
+# 6. ESTRUTURA VISUAL INTERATIVA (AS 4 VISÕES REQUISITADAS)
 # ==============================================================================
 st.title("Strategic Management & Corporate Analytics")
 st.markdown(f"Análise de Desempenho e Indicadores de Mercado: **{df_foco_ativo['RAZAO_SOCIAL']}**")
@@ -185,7 +256,6 @@ st.markdown(
 )
 st.markdown("---")
 
-# Definição exata das abas exigidas pelo conselho: COCKPIT, BP, DRE, DFC
 tab_cockpit, tab_bp, tab_dre, tab_dfc = st.tabs([
     "🎯 COCKPIT DE INDICADORES",
     "📊 BALANÇO PATRIMONIAL (BP)",
@@ -194,12 +264,11 @@ tab_cockpit, tab_bp, tab_dre, tab_dfc = st.tabs([
 ])
 
 # ------------------------------------------------------------------------------
-# ABAS 1: COCKPIT DE INDICADORES (ESTATÍSTICO AVANÇADO)
+# ABA 1: COCKPIT DE INDICADORES (ESTATÍSTICO AVANÇADO)
 # ------------------------------------------------------------------------------
 with tab_cockpit:
     st.markdown(f"### 🚀 Cockpit de Comando Executivo ({escopo_geografico})")
     
-    # Linha de KPIs Comparativos Rápidos
     col1, col2, col3, col4 = st.columns(4)
     med_roe = df_concorrentes['IND_ROE'].median() if not df_concorrentes.empty else 0
     med_liq = df_concorrentes['IND_LIQUIDEZ_CORRENTE'].median() if not df_concorrentes.empty else 0
@@ -207,23 +276,22 @@ with tab_cockpit:
     
     with col1:
         v = df_foco_ativo['IND_ROE']
-        status = "<span class='status-positive'>▲ Superior</span>" if v > med_roe else "<span class='status-negative'>▼ Inferior</span>"
-        st.markdown(f"<div class='executive-card'><div class='card-title'>Retorno s/ Patrimônio (ROE)</div><div class='card-value'>{v:.2f}%</div><div class='card-meta'>{status} | Mediana: {med_roe:.2f}%</div></div>", unsafe_allow_html=True)
+        status, _ = _obter_status_comparativo(v, med_roe)
+        st.markdown(_kpi_card_premium("Retorno s/ Patrimônio (ROE)", _fmt(v, suffix="%"), status), unsafe_allow_html=True)
     with col2:
         v = df_foco_ativo['IND_LIQUIDEZ_CORRENTE']
-        status = "<span class='status-positive'>▲ Superior</span>" if v > med_liq else "<span class='status-negative'>▼ Inferior</span>"
-        st.markdown(f"<div class='executive-card'><div class='card-title'>Liquidez Corrente</div><div class='card-value'>{v:.2f}</div><div class='card-meta'>{status} | Mediana: {med_liq:.2f}</div></div>", unsafe_allow_html=True)
+        status, _ = _obter_status_comparativo(v, med_liq)
+        st.markdown(_kpi_card_premium("Liquidez Corrente", _fmt(v), status), unsafe_allow_html=True)
     with col3:
         v = df_foco_ativo['IND_MARGEM_LIQUIDA']
-        status = "<span class='status-positive'>▲ Superior</span>" if v > med_mg else "<span class='status-negative'>▼ Inferior</span>"
-        st.markdown(f"<div class='executive-card'><div class='card-title'>Margem Líquida</div><div class='card-value'>{v:.2f}%</div><div class='card-meta'>{status} | Mediana: {med_mg:.2f}%</div></div>", unsafe_allow_html=True)
+        status, _ = _obter_status_comparativo(v, med_mg)
+        st.markdown(_kpi_card_premium("Margem Líquida", _fmt(v, suffix="%"), status), unsafe_allow_html=True)
     with col4:
         v_st = df_foco_ativo['IND_ST']
         v_ncg = df_foco_ativo['IND_NCG']
         diag = "<span class='status-positive'>Sólido</span>" if v_st >= 0 and v_ncg >= 0 else "<span class='status-negative'>Efeito Tesoura</span>" if v_st < 0 and v_ncg > 0 else "<span class='status-neutral'>Alavancado</span>"
-        st.markdown(f"<div class='executive-card'><div class='card-title'>Modelo Fleuriet (Caixa)</div><div class='card-value' style='font-size:22px; padding:5px 0;'>{diag}</div><div class='card-meta'>ST: R$ {v_st:,.0f} | NCG: R$ {v_ncg:,.0f}</div></div>", unsafe_allow_html=True)
+        st.markdown(_kpi_card_premium("Modelo Fleuriet (Caixa)", diag, f"ST: {_fmt(v_st, 0, prefix='R$ ')} | NCG: {_fmt(v_ncg, 0, prefix='R$ ')}"), unsafe_allow_html=True)
 
-    # Gráfico de Dispersão e Variância Estatística (Boxplot)
     st.markdown("#### ⚖️ Curva de Dispersão e Classificação de Quartil")
     col_g, col_q = st.columns([2, 1])
     
@@ -232,22 +300,23 @@ with tab_cockpit:
         df_melt = df_concorrentes.melt(id_vars=['RAZAO_SOCIAL'], value_vars=metrics_list, var_name='Met', value_name='Val')
         df_melt['Met_Desc'] = df_melt['Met'].map({'IND_ROE': 'ROE %', 'IND_MARGEM_LIQUIDA': 'Margem Líquida %', 'IND_LIQUIDEZ_CORRENTE': 'Liquidez Corrente (Ratio)'})
         
-        fig_box = px.box(df_melt, x='Met_Desc', y='Val', title="Distribuição de Parâmetros Concorrenciais", points=False, color_discrete_sequence=['#475569'])
+        fig_box = px.boxplot(df_melt, x='Met_Desc', y='Val', title="Distribuição de Parâmetros Concorrenciais", points=False, color_discrete_sequence=['#475569'])
         
         for m in metrics_list:
-            fig_box.add_trace(go.Scatter(
-                x=[df_melt['Met_Desc'][df_melt['Met'] == m].iloc[0]], y=[df_foco_ativo[m]],
-                mode='markers', marker=dict(color='#9B2BC7', size=14, symbol='diamond', line=dict(color='white', width=1.5)),
-                name=df_foco_ativo['RAZAO_SOCIAL']
-            ))
+            if not df_melt[df_melt['Met'] == m].empty:
+                fig_box.add_trace(go.Scatter(
+                    x=[df_melt['Met_Desc'][df_melt['Met'] == m].iloc[0]], y=[df_foco_ativo[m]],
+                    mode='markers', marker=dict(color='#9B2BC7', size=14, symbol='diamond', line=dict(color='white', width=1.5)),
+                    name=df_foco_ativo['RAZAO_SOCIAL']
+                ))
         fig_box.update_layout(template="simple_white", showlegend=False, xaxis_title="")
         st.plotly_chart(fig_box, use_container_width=True)
         
     with col_q:
         st.markdown("##### 🕵️ Diagnóstico de Quartil Corporativo")
-        roe_q1 = np.percentile(df_concorrentes['IND_ROE'], 25) if not df_concorrentes.empty else 0
-        roe_q2 = np.percentile(df_concorrentes['IND_ROE'], 50) if not df_concorrentes.empty else 0
-        roe_q3 = np.percentile(df_concorrentes['IND_ROE'], 75) if not df_concorrentes.empty else 0
+        roe_q1 = np.percentile(df_concorrentes['IND_ROE'].dropna(), 25) if not df_concorrentes.empty else 0
+        roe_q2 = np.percentile(df_concorrentes['IND_ROE'].dropna(), 50) if not df_concorrentes.empty else 0
+        roe_q3 = np.percentile(df_concorrentes['IND_ROE'].dropna(), 75) if not df_concorrentes.empty else 0
         roe_empresa = df_foco_ativo['IND_ROE']
         
         st.caption(f"• Top 25% Mercado (Q3): Acima de **{roe_q3:.2f}%**")
@@ -265,19 +334,38 @@ with tab_cockpit:
             st.error(f"**4º Quartil — SUB-PERFORMANCE CRÍTICA**\nAlerta Vermelho para o Conselho Executivo. Retorno sobre patrimônio severamente abaixo das referências do setor.")
 
 # ------------------------------------------------------------------------------
-# ABAS 2: BALANÇO PATRIMONIAL (BP)
+# ABA 2: BALANÇO PATRIMONIAL (BP) & RESOLVABILIDADE / ENDIVIDAMENTO
 # ------------------------------------------------------------------------------
 with tab_bp:
-    st.markdown("### 📊 Estrutura Patrimonial Analítica")
+    st.markdown("### 📊 Estrutura Patrimonial Analítica e Solvência de Balanço")
     
+    l1, l2, l3, l4 = st.columns(4)
+    with l1:
+        status_lg, _ = _obter_status_comparativo(df_foco_ativo['IND_LIQUIDEZ_GERAL'], df_concorrentes['IND_LIQUIDEZ_GERAL'].median())
+        st.markdown(_kpi_card_premium("Liquidez Geral (LG)", _fmt(df_foco_ativo['IND_LIQUIDEZ_GERAL']), status_lg), unsafe_allow_html=True)
+    with l2:
+        status_ls, _ = _obter_status_comparativo(df_foco_ativo['IND_LIQUIDEZ_SECA'], df_concorrentes['IND_LIQUIDEZ_SECA'].median())
+        st.markdown(_kpi_card_premium("Liquidez Seca (LS)", _fmt(df_foco_ativo['IND_LIQUIDEZ_SECA']), status_ls), unsafe_allow_html=True)
+    with l3:
+        status_pct, _ = _obter_status_comparativo(df_foco_ativo['IND_PCT_AT'], df_concorrentes['IND_PCT_AT'].median(), maior_melhor=False)
+        st.markdown(_kpi_card_premium("Endividamento Total (PCT/AT)", _fmt(df_foco_ativo['IND_PCT_AT'] * 100, suffix="%"), status_pct), unsafe_allow_html=True)
+    with l4:
+        status_comp, _ = _obter_status_comparativo(df_foco_ativo['IND_COMPOSICAO_ENDIV'], df_concorrentes['IND_COMPOSICAO_ENDIV'].median(), maior_melhor=False)
+        st.markdown(_kpi_card_premium("Perfil da Dívida (Curto Prazo)", _fmt(df_foco_ativo['IND_COMPOSICAO_ENDIV'] * 100, suffix="%"), status_comp), unsafe_allow_html=True)
+
     col_chart_bp, col_table_bp = st.columns([1, 1])
     with col_chart_bp:
-        # Gráfico macro de alocação de recursos
         labels_ativo = ['Ativo Circulante', 'Ativo Não Circulante']
         values_ativo = [df_foco_ativo['V02_ATIVO_CIRC'], df_foco_ativo['V03_ATIVO_NCIRC']]
         fig_bp_pie = go.Figure(data=[go.Pie(labels=labels_ativo, values=values_ativo, hole=.4, marker_colors=['#1E293B', '#82E8E1'])])
         fig_bp_pie.update_layout(title="Distribuição Macroeconômica de Ativos", margin=dict(t=40, b=0, l=0, r=0))
         st.plotly_chart(fig_bp_pie, use_container_width=True)
+        
+        labels_ac = ['Caixa e Equivalentes', 'Contas a Receber', 'Estoques']
+        values_ac = [df_foco_ativo['V22_CAIXA_BP'], df_foco_ativo['V07_CONTAS_RECEBER'], df_foco_ativo['V06_ESTOQUES']]
+        fig_ac_pie = go.Figure(data=[go.Pie(labels=labels_ac, values=values_ac, hole=.3, marker_colors=['#0F172A', '#38BDF8', '#F59E0B'])])
+        fig_ac_pie.update_layout(title="Decomposição Interna do Ativo Circulante", margin=dict(t=40, b=0, l=0, r=0))
+        st.plotly_chart(fig_ac_pie, use_container_width=True)
         
     with col_table_bp:
         st.markdown("**Demonstração do Balanço Patrimonial Comercial (R$)**")
@@ -317,16 +405,29 @@ with tab_bp:
                 df_foco_ativo['V12_PL']
             ]
         })
-        # Formatação de Moeda Brasileira Corporativa
-        bp_structured[f"Exercício {ano_analise}"] = bp_structured[f"Exercício {ano_analise}"].map(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) else "R$ 0,00")
+        bp_structured[f"Exercício {ano_analise}"] = bp_structured[f"Exercício {ano_analise}"].map(lambda x: _fmt(x, prefix="R$ "))
         st.dataframe(bp_structured, use_container_width=True, hide_index=True)
 
 # ------------------------------------------------------------------------------
-# ABAS 3: DEMONSTRAÇÃO DE RESULTADO DO EXERCÍCIO (DRE)
+# ABA 3: DEMONSTRAÇÃO DE RESULTADO (DRE) & MARGENS DE RENTABILIDADE
 # ------------------------------------------------------------------------------
 with tab_dre:
-    st.markdown("### 📈 Performance Operacional e Margens de Lucro")
+    st.markdown("### 📈 Performance Operacional, Eficiência de Escala e Rentabilidade")
     
+    r1, r2, r3, r4 = st.columns(4)
+    with r1:
+        status_roa, _ = _obter_status_comparativo(df_foco_ativo['IND_ROA'], df_concorrentes['IND_ROA'].median())
+        st.markdown(_kpi_card_premium("Retorno sobre Ativos (ROA)", _fmt(df_foco_ativo['IND_ROA'], suffix="%"), status_roa), unsafe_allow_html=True)
+    with r2:
+        status_roi, _ = _obter_status_comparativo(df_foco_ativo['IND_ROI'], df_concorrentes['IND_ROI'].median())
+        st.markdown(_kpi_card_premium("Retorno s/ Capital Investido (ROI)", _fmt(df_foco_ativo['IND_ROI'], suffix="%"), status_roi), unsafe_allow_html=True)
+    with r3:
+        status_mb, _ = _obter_status_comparativo(df_foco_ativo['IND_MARGEM_BRUTA'], df_concorrentes['IND_MARGEM_BRUTA'].median())
+        st.markdown(_kpi_card_premium("Margem Bruta Comercial", _fmt(df_foco_ativo['IND_MARGEM_BRUTA'], suffix="%"), status_mb), unsafe_allow_html=True)
+    with r4:
+        status_mo, _ = _obter_status_comparativo(df_foco_ativo['IND_MARGEM_OPERACIONAL'], df_concorrentes['IND_MARGEM_OPERACIONAL'].median())
+        st.markdown(_kpi_card_premium("Margem Operacional (EBIT)", _fmt(df_foco_ativo['IND_MARGEM_OPERACIONAL'], suffix="%"), status_mo), unsafe_allow_html=True)
+
     col_table_dre, col_chart_dre = st.columns([1, 1])
     with col_table_dre:
         st.markdown("**Demonstração de Resultado do Exercício (DRE)**")
@@ -334,7 +435,7 @@ with tab_dre:
             "Estrutura de Resultados": [
                 "Receita Líquida de Vendas",
                 "Custo dos Produtos Vendidos (CPV)",
-                "LUCRO BRUTO COMRCIAL",
+                "LUCRO BRUTO COMERCIAL",
                 "Resultado Operacional (EBIT)",
                 "LUCRO LÍQUIDO DO EXERCÍCIO",
                 "Lucro por Ação Básico (LPA)",
@@ -350,11 +451,14 @@ with tab_dre:
                 df_foco_ativo['V26_LPA_DILUIDO']
             ]
         })
-        dre_structured["Valor Realizado"] = dre_structured["Valor Realizado"].map(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) else "R$ 0,00")
+        
+        dre_structured["Valor Realizado"] = dre_structured.apply(
+            lambda r: _fmt(r["Valor Realizado"], suffix=" R$/ação") if "LPA" in r["Estrutura de Resultados"] or "Ação" in r["Estrutura de Resultados"] else _fmt(r["Valor Realizado"], prefix="R$ "), 
+            axis=1
+        )
         st.dataframe(dre_structured, use_container_width=True, hide_index=True)
         
     with col_chart_dre:
-        # Gráfico de Cascata de Quebra de Margens Marginais
         fig_dre_bar = go.Figure(go.Bar(
             x=['Margem Bruta', 'Margem Operacional', 'Margem Líquida'],
             y=[df_foco_ativo['IND_MARGEM_BRUTA'], df_foco_ativo['IND_MARGEM_OPERACIONAL'], df_foco_ativo['IND_MARGEM_LIQUIDA']],
@@ -364,11 +468,25 @@ with tab_dre:
         st.plotly_chart(fig_dre_bar, use_container_width=True)
 
 # ------------------------------------------------------------------------------
-# ABAS 4: DEMONSTRAÇÃO DE FLUXO DE CAIXA (DFC)
+# ABA 4: DEMONSTRAÇÃO DE FLUXO DE CAIXA (DFC) & GIROS DE ATIVIDADE
 # ------------------------------------------------------------------------------
 with tab_dfc:
-    st.markdown("### 💸 Fluxo de Caixa e Solvência de Caixa")
+    st.markdown("### 💸 Fluxo de Caixa, Ciclos de Capital e Giros de Atividade")
     
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        status_pmre, _ = _obter_status_comparativo(df_foco_ativo['IND_PMRE'], df_concorrentes['IND_PMRE'].median(), maior_melhor=False)
+        st.markdown(_kpi_card_premium("Prazo Renov. Estoques (PMRE)", _fmt(df_foco_ativo['IND_PMRE'], 1, suffix=" dias"), status_pmre), unsafe_allow_html=True)
+    with a2:
+        status_pmrv, _ = _obter_status_comparativo(df_foco_ativo['IND_PMRV'], df_concorrentes['IND_PMRV'].median(), maior_melhor=False)
+        st.markdown(_kpi_card_premium("Prazo Receb. Vendas (PMRV)", _fmt(df_foco_ativo['IND_PMRV'], 1, suffix=" dias"), status_pmrv), unsafe_allow_html=True)
+    with a3:
+        status_pmpc, _ = _obter_status_comparativo(df_foco_ativo['IND_PMPC'], df_concorrentes['IND_PMPC'].median(), maior_melhor=True)
+        st.markdown(_kpi_card_premium("Prazo Pagam. Fornec. (PMPC)", _fmt(df_foco_ativo['IND_PMPC'], 1, suffix=" dias"), status_pmpc), unsafe_allow_html=True)
+    with a4:
+        status_cf, _ = _obter_status_comparativo(df_foco_ativo['IND_CICLO_FINANCEIRO'], df_concorrentes['IND_CICLO_FINANCEIRO'].median(), maior_melhor=False)
+        st.markdown(_kpi_card_premium("Ciclo Financeiro Operacional", _fmt(df_foco_ativo['IND_CICLO_FINANCEIRO'], 1, suffix=" dias"), status_cf), unsafe_allow_html=True)
+
     col_t_dfc, col_k_dfc = st.columns([3, 2])
     with col_t_dfc:
         st.markdown("**Mapeamento de Liquidez de Caixa e Prazos Médios**")
@@ -382,24 +500,24 @@ with tab_dfc:
                 "Ciclo Financeiro Operacional (Dias)"
             ],
             "Métrica Calculada": [
-                df_foco_ativo['IND_GIRO_ESTOQUES'],
-                df_foco_ativo['IND_PMRE'],
-                df_foco_ativo['IND_PMRV'],
-                df_foco_ativo['IND_PMPC'],
-                df_foco_ativo['IND_CICLO_ECONOMICO'],
-                df_foco_ativo['IND_CICLO_FINANCEIRO']
+                _fmt(df_foco_ativo['IND_GIRO_ESTOQUES'], suffix="x"),
+                _fmt(df_foco_ativo['IND_PMRE'], 1, suffix=" dias"),
+                _fmt(df_foco_ativo['IND_PMRV'], 1, suffix=" dias"),
+                _fmt(df_foco_ativo['IND_PMPC'], 1, suffix=" dias"),
+                _fmt(df_foco_ativo['IND_CICLO_ECONOMICO'], 1, suffix=" dias"),
+                _fmt(df_foco_ativo['IND_CICLO_FINANCEIRO'], 1, suffix=" dias")
             ]
         })
         st.dataframe(dfc_metrics, use_container_width=True, hide_index=True)
         
     with col_k_dfc:
-        st.markdown("**Disponibilidade de Caixa Real**")
-        st.info(f"💰 **Saldo Final de Caixa (Camada DFC):** R$ {df_foco_ativo['V23_CAIXA_DFC']:,.2f}")
-        st.metric(label="Dívida Líquida Estrutural", value=f"R$ {df_foco_ativo['AUX_DIVIDA_LIQUIDA']:,.2f}")
+        st.markdown("**Disponibilidade de Caixa e Alavancagem**")
+        st.info(f"💰 **Saldo Final de Caixa (Camada DFC):** {_fmt(df_foco_ativo['V23_CAIXA_DFC'], prefix='R$ ')}")
+        st.metric(label="Dívida Líquida Estrutural", value=_fmt(df_foco_ativo['AUX_DIVIDA_LIQUIDA'], prefix="R$ "))
         st.caption("A Dívida Líquida desconta as disponibilidades de caixa imediatas das obrigações bancárias de CP e LP.")
 
 # ==============================================================================
-# 6. RODAPÉ INSTITUCIONAL GLOBAL
+# 7. RODAPÉ INSTITUCIONAL GLOBAL
 # ==============================================================================
 st.markdown("---")
 c1, c2 = st.columns([3, 1])
